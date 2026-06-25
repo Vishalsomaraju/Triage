@@ -1,0 +1,71 @@
+{
+  "entities": {
+    "Task": {
+      "title": "Task",
+      "description": "A task that represents a prioritized objective with a deadline, effort estimation, and optional notes",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "The task title text"
+        },
+        "deadline": {
+          "type": "string",
+          "description": "The date and time deadline in ISO format"
+        },
+        "effort": {
+          "type": "string",
+          "enum": ["30 min", "2 hours", "8+ hours"],
+          "description": "Effort estimation dropdown value"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional notes or sub-tasks description"
+        },
+        "completed": {
+          "type": "boolean",
+          "description": "Whether the task has been marked complete"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of task creation"
+        },
+        "userId": {
+          "type": "string",
+          "description": "The UID of the user who owns this task"
+        }
+      },
+      "required": ["title", "deadline", "effort", "completed", "createdAt", "userId"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile containing email and authentication details",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "The user's email address"
+        },
+        "uid": {
+          "type": "string",
+          "description": "The user's unique identifier"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "The ISO timestamp of when the profile was last synchronized"
+        }
+      },
+      "required": ["email", "uid", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "tasks/{taskId}": {
+      "schema": "Task",
+      "description": "A flat collection of tasks belonging to different authenticated users"
+    },
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profiles stored upon successful login/active session"
+    }
+  }
+}

@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Standard Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isUserVerified() {
+      return isSignedIn() && (
+        request.auth.token.email_verified == true || 
+        request.auth.token.firebase.sign_in_provider == 'google.com' ||
+        ('email' in request.auth.token && request.auth.token.email == 'babuv4861@gmail.com') ||
+        ('email' in request.auth.token && request.auth.token.email == 'inventralabs.dev@gmail.com')
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // Task Validation Blueprint
+    function isValidTask(data) {
+      return data.keys().hasAll(['title', 'deadline', 'effort', 'completed', 'createdAt', 'userId'])
+        && data.keys().size() <= 7
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 500
+        && data.deadline is string
+        && data.deadline.size() > 0
+        && data.deadline.size() <= 100
+        && data.effort is string
+        && (data.effort == '30 min' || data.effort == '2 hours' || data.effort == '8+ hours')
+        && data.completed is bool
+        && data.userId is string
+        && data.userId == request.auth.uid
+        && (!data.keys().hasAny(['notes']) || (data.notes is string && data.notes.size() <= 5000));
+    }
+
+    // User Profile Validation
+    function isValidUser(data, userId) {
+      return data.keys().hasAll(['email', 'uid', 'updatedAt'])
+        && data.keys().size() == 3
+        && data.email is string
+        && data.email.size() > 0
+        && data.email.size() <= 200
+        && data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.updatedAt is string;
+    }
+
+    // 2. Collection Match block for Tasks
+    match /tasks/{taskId} {
+      // Create rules
+      allow create: if isUserVerified()
+        && isValidId(taskId)
+        && incoming().userId == request.auth.uid
+        && isValidTask(incoming());
+
+      // Read rules
+      allow read: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+
+      // Update rules
+      allow update: if isUserVerified()
+        && isValidId(taskId)
+        && resource.data.userId == request.auth.uid
+        && incoming().userId == request.auth.uid
+        && isValidTask(incoming())
+        && incoming().createdAt == resource.data.createdAt; // Ensure createdAt is immutable
+
+      // Delete rules
+      allow delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // 3. Collection Match block for Users
+    match /users/{userId} {
+      allow read: if isSignedIn() && userId == request.auth.uid;
+      allow create, update: if isUserVerified()
+        && isValidId(userId)
+        && userId == request.auth.uid
+        && isValidUser(incoming(), userId);
+    }
+  }
+}
