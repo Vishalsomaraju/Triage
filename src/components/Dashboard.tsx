@@ -15,6 +15,7 @@ import { auth, db, OperationType, handleFirestoreError } from "../firebase";
 import { Task, EffortEstimate } from "../types";
 import TaskItem from "./TaskItem";
 import TaskModal from "./TaskModal";
+import { formatFriendlyDate } from "../utils";
 import { 
   ClipboardList, 
   Plus, 
@@ -25,7 +26,9 @@ import {
   ListTodo,
   Sparkles,
   Mail,
-  AlertCircle
+  AlertCircle,
+  Clock,
+  Calendar
 } from "lucide-react";
 
 interface PrioritizationResult {
@@ -147,7 +150,7 @@ export default function Dashboard({ user }: DashboardProps) {
       const payloadTasks = pendingTasks.map((task) => {
         const deadlineDate = new Date(task.deadline);
         const diffMs = deadlineDate.getTime() - now.getTime();
-        const hoursRemaining = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
+        const hoursRemaining = parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2));
         
         return {
           id: task.id,
@@ -451,8 +454,18 @@ export default function Dashboard({ user }: DashboardProps) {
               </div>
 
               {prioritizeError && (
-                <div className="p-3 bg-rose-50 border border-rose-100 text-rose-700 text-xs rounded-md">
-                  {prioritizeError}
+                <div className="p-4 bg-rose-50 border border-rose-100 text-rose-800 text-xs rounded-lg flex items-start gap-3 shadow-xs">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-500 mt-0.5" />
+                  <div className="space-y-1 flex-1">
+                    <p className="font-semibold text-rose-900">Analysis Issue</p>
+                    <p className="leading-relaxed text-rose-700">{prioritizeError}</p>
+                    <button
+                      onClick={handlePrioritizeTasks}
+                      className="mt-2 inline-flex items-center gap-1 px-2 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white font-semibold text-[10px] transition-colors cursor-pointer"
+                    >
+                      Retry Analysis
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -484,7 +497,7 @@ export default function Dashboard({ user }: DashboardProps) {
                   ) : (
                     <>
                       <Mail size={14} />
-                      <span>Trigger Email Alert Now</span>
+                      <span>Preview Today's Alert</span>
                     </>
                   )}
                 </button>
@@ -535,7 +548,19 @@ export default function Dashboard({ user }: DashboardProps) {
                               </span>
                             </div>
 
-                            <ul className="list-disc pl-4 space-y-1 mt-3 text-xs text-brand-muted">
+                            {/* Task metadata badges aligning with TaskItem style */}
+                            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-2 text-[11px] text-brand-muted">
+                              <span className="inline-flex items-center gap-1 font-medium px-2 py-0.5 rounded-full bg-brand-accent/10 text-brand-accent">
+                                <Clock size={10} />
+                                {task.effort}
+                              </span>
+                              <span className="inline-flex items-center gap-1 opacity-85">
+                                <Calendar size={11} className="text-brand-accent" />
+                                <span>Due: {formatFriendlyDate(task.deadline)}</span>
+                              </span>
+                            </div>
+
+                            <ul className="list-disc pl-4 space-y-1 mt-3.5 text-xs text-brand-muted">
                               {result.why.map((bullet, idx) => (
                                 <li key={idx} className="leading-relaxed">
                                   {bullet}

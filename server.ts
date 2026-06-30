@@ -49,6 +49,28 @@ const getAdminDb = () => {
   return getFirestore(config.firestoreDatabaseId || "(default)");
 };
 
+// Helper to format remaining hours, handling negative values for overdue tasks with a friendly descriptive string
+function formatHoursRemainingText(hours: number): string {
+  if (hours < 0) {
+    const absHours = Math.abs(hours);
+    if (absHours >= 24) {
+      const days = Math.round(absHours / 24);
+      return `Overdue by ${days} ${days === 1 ? "day" : "days"}`;
+    } else {
+      const formatted = absHours % 1 === 0 ? absHours.toString() : absHours.toFixed(1);
+      return `Overdue by ${formatted} hours`;
+    }
+  } else {
+    if (hours >= 24) {
+      const days = Math.round(hours / 24);
+      return `Deadline in ${days} ${days === 1 ? "day" : "days"}`;
+    } else {
+      const formatted = hours % 1 === 0 ? hours.toString() : hours.toFixed(1);
+      return `Deadline in ${formatted} hours`;
+    }
+  }
+}
+
 // Core Task Prioritization logic powered by Gemini
 async function prioritizeTasksWithGemini(tasks: any[]): Promise<any[]> {
   if (tasks.length === 0) {
@@ -79,23 +101,29 @@ Tasks to prioritize:
 ${mappedTasks.map((task, index) => `${index + 1}. Task ID: ${task.id}
    - Title: "${task.title}"
    - Deadline: "${task.deadline}"
-   - Hours Remaining: ${task.hoursRemaining} hours (calculated from current local time)
+   - Hours Remaining: ${task.hoursRemaining} hours (negative if overdue)
+   - Time Status / Deadline Gap: "${formatHoursRemainingText(task.hoursRemaining)}"
    - Effort Estimate: "${task.effort}"
    - Notes: "${task.notes || "(No notes provided)"}"
 `).join("\n")}
 
 Strict Rules for your analysis:
 1. Risk level ("riskLevel") MUST be strictly classified as "High", "Medium", or "Low" based on the following deterministic rules:
-   - "High" if "Hours Remaining" is less than 24 hours AND "Effort Estimate" is "High" or "Medium", OR if "Hours Remaining" is less than 6 hours.
-   - "Medium" if "Hours Remaining" is less than 24 hours AND "Effort Estimate" is "Low", OR if "Hours Remaining" is between 24 and 72 hours (1 to 3 days) AND "Effort Estimate" is "High" or "Medium".
-   - "Low" if "Hours Remaining" is greater than 72 hours (more than 3 days), OR if "Hours Remaining" is between 24 and 72 hours AND "Effort Estimate" is "Low".
+   - "High" if "Hours Remaining" is negative (overdue), OR if it is less than 24 hours AND "Effort Estimate" is "High" or "Medium", OR if it is less than 6 hours.
+   - "Medium" if "Hours Remaining" is less than 24 hours AND "Effort Estimate" is "Low", OR if it is between 24 and 72 hours (1 to 3 days) AND "Effort Estimate" is "High" or "Medium".
+   - "Low" if "Hours Remaining" is greater than 72 hours (more than 3 days), OR if it is between 24 and 72 hours AND "Effort Estimate" is "Low".
 2. The "why" list of bullet points must ONLY reference real, verified information from the input parameters:
-   - The exact deadline gap (e.g. "Deadline in 18 hours" or "Deadline in 3 days")
-   - The effort estimate (e.g. "Estimated effort: 2 hours")
-   - Whether notes were provided or are empty (e.g. "Notes were provided" or "No notes were provided")
+   - The exact "Time Status / Deadline Gap" provided in the input (e.g. "Deadline in 18 hours", "Deadline in 3 days", "Overdue by 5 hours", or "Overdue by 2 days")
+   - The effort estimate (e.g. "Estimated effort: 2 hours" or "Estimated effort: High")
+   - Whether notes were provided, empty, or lacked specific details:
+     * If notes are empty, use "No additional task notes were provided."
+     * If notes exist but are too thin, short, vague, or simply restate the title (falling back to generic action), you MUST use: "Notes were provided but lacked specific details."
+     * If notes are substantive, actionable, and detailed (not triggering the fallback), you MUST use: "Custom notes were provided for task details."
    Do not invent any details, status updates, progress levels, external blockers, or task dependencies that are not explicitly present in the input.
-3. If notes exist, base the "nextAction" on the actual contents of those notes.
-4. If notes are empty, provide an honest, generic first step: "Spend 15 minutes breaking this task into smaller actionable steps."
+3. If notes exist, you must evaluate if the notes are too thin, short, vague, or simply restate the title (e.g. "study for the important exam", "study for the exam", "do it").
+   - If the notes are too thin/vague to extract a specific concrete sub-task or actionable next step, the "nextAction" MUST fall back to the exact generic instruction: "Spend 15 minutes breaking this task into smaller actionable steps."
+   - Otherwise, you must use the specific details or requirements in those notes to formulate a concrete, highly actionable next step. This next step MUST be an active instruction (starting with a strong imperative verb like "Review", "Draft", "Outline", "Gather", "Create", "Set up", "Open", etc.) and must NEVER simply echo, quote, paraphrase, or restate the notes or title verbatim.
+4. If notes are empty, provide the exact generic instruction: "Spend 15 minutes breaking this task into smaller actionable steps."
 5. You must return valid structured JSON matching the schema.`;
 
   // Local heuristic fallback prioritization in case all LLMs are completely unreachable (100% uptime guarantee)
@@ -107,7 +135,7 @@ Strict Rules for your analysis:
       const notes = task.notes || "";
       
       let riskLevel: "High" | "Medium" | "Low" = "Low";
-      if ((hours < 24 && (effort === "High" || effort === "Medium")) || hours < 6) {
+      if (hours < 6 || (hours < 24 && (effort === "High" || effort === "Medium"))) {
         riskLevel = "High";
       } else if ((hours < 24 && effort === "Low") || (hours >= 24 && hours <= 72 && (effort === "High" || effort === "Medium"))) {
         riskLevel = "Medium";
@@ -115,19 +143,42 @@ Strict Rules for your analysis:
         riskLevel = "Low";
       }
 
+      let isNotesVague = false;
+      if (notes) {
+        const lowerNotes = notes.trim().toLowerCase();
+        const lowerTitle = task.title.trim().toLowerCase();
+        
+        isNotesVague = 
+          lowerNotes.length < 15 || 
+          lowerNotes === lowerTitle || 
+          lowerNotes.includes(lowerTitle) || 
+          lowerTitle.includes(lowerNotes) ||
+          (lowerNotes.includes("study") && lowerNotes.includes("exam")) ||
+          lowerNotes.split(/\s+/).length <= 4;
+      }
+
       const why: string[] = [];
-      const formattedHours = hours < 24 ? `${hours} hours` : `${Math.round(hours / 24)} days`;
-      why.push(`Deadline is in ${formattedHours} (${hours} hours remaining).`);
+      why.push(formatHoursRemainingText(hours) + ".");
       why.push(`Estimated effort is specified as ${effort}.`);
       if (notes) {
-        why.push("Custom notes were provided for task details.");
+        if (isNotesVague) {
+          why.push("Notes were provided but lacked specific details.");
+        } else {
+          why.push("Custom notes were provided for task details.");
+        }
       } else {
         why.push("No additional task notes were provided.");
       }
 
       let nextAction = "";
       if (notes) {
-        nextAction = `Based on your notes: "${notes}". Break this down and address the core requirements immediately.`;
+        if (isNotesVague) {
+          nextAction = "Spend 15 minutes breaking this task into smaller actionable steps.";
+        } else {
+          // Clean and trim notes to form an active statement without simply repeating verbatim
+          const cleanedNotes = notes.length > 80 ? notes.substring(0, 77) + "..." : notes;
+          nextAction = `Review the specific details provided in your notes ("${cleanedNotes}") and draft a step-by-step plan to begin execution.`;
+        }
       } else {
         nextAction = "Spend 15 minutes breaking this task into smaller actionable steps.";
       }
@@ -171,7 +222,7 @@ Strict Rules for your analysis:
               },
               nextAction: {
                 type: Type.STRING,
-                description: "The concrete immediate action step, based on task notes if provided, otherwise standard breakdown."
+                description: "A concrete, highly specific immediate action step starting with an active imperative verb (e.g. 'Review', 'Draft', 'Gather', 'Outline'). It must use the details from notes if provided to create a genuine first step, but it must NEVER simply echo or restate the title or notes."
               }
             },
             required: ["taskId", "riskLevel", "why", "nextAction"]
@@ -361,7 +412,7 @@ async function runDailyPrioritization() {
       const payloadTasks = pendingUserTasks.map((task) => {
         const deadlineDate = new Date(task.deadline);
         const diffMs = deadlineDate.getTime() - now.getTime();
-        const hoursRemaining = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
+        const hoursRemaining = parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2));
         
         return {
           id: task.id,
@@ -403,7 +454,7 @@ async function runDailyPrioritization() {
     if (err?.message?.includes("PERMISSION_DENIED")) {
       console.warn(
         "Note: Cross-project Service Account limitations inside the AI Studio sandboxed preview prevent the backend server from directly querying Firestore. " +
-        "Please use the 'Trigger Email Alert Now' button in the dashboard to test end-to-end prioritization and email delivery!"
+        "Please use the 'Preview Today's Alert' button in the dashboard to test end-to-end prioritization and email delivery!"
       );
     }
   }
@@ -448,7 +499,7 @@ app.post("/api/cron/trigger-now", async (req, res) => {
       const payloadTasks = tasks.map((task: any) => {
         const deadlineDate = new Date(task.deadline);
         const diffMs = deadlineDate.getTime() - now.getTime();
-        const hoursRemaining = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
+        const hoursRemaining = parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2));
         
         return {
           id: task.id,
